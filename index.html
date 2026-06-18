@@ -221,38 +221,64 @@ function init(){
   state.breathAudio=sGet('rumo:breathAudio')!=='false';
   renderHeader();render();
   if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(function(){});
+  preloadAudio(); // start fetching MP3 files immediately
 }
 
 // ── AUDIO ENGINE ───────────────────────────────────────────────
-// iOS PWA: use ONE shared Audio element, never recreated.
-// Serve real .mp3 files (not data URIs — large data URIs trigger onerror on iOS).
-// First play() must be synchronous in user gesture — subsequent plays
-// on the SAME element work from callbacks/timeouts.
+// AudioContext + fetch() preloading.
+// iOS unlocks AudioContext at page level on first user gesture (resumeCtx).
+// Files pre-fetched on init; playKey uses decoded AudioBuffers — zero timing issues.
 
-var sfx = new Audio();
-var scanIdx=0, scanTimer=null, breathAudioTimer=null;
+var actx = null;
+var bufs = {};
+var scanIdx=0, scanTimer=null, breathATimer=null;
+var AKEYS=['inspira','expira','scan_0','scan_1','scan_2','scan_3',
+           'scan_4','scan_5','scan_6','scan_7','scan_8','scan_9','scan_10'];
+
+function getCtx(){
+  if(!actx) actx=new(window.AudioContext||window.webkitAudioContext)();
+  return actx;
+}
+
+// Call from any button in user gesture to unlock iOS audio
+function resumeCtx(){
+  try{ var c=getCtx(); if(c.state==='suspended')c.resume(); }catch(e){}
+}
+
+// Pre-fetch and decode all audio files on page load
+function preloadAudio(){
+  AKEYS.forEach(function(key){
+    fetch('./audio/'+key+'.mp3')
+      .then(function(r){return r.arrayBuffer();})
+      .then(function(ab){return getCtx().decodeAudioData(ab);})
+      .then(function(buf){bufs[key]=buf;})
+      .catch(function(){});
+  });
+}
 
 function stopAllAudio(){
   clearTimeout(scanTimer);
-  clearTimeout(breathAudioTimer);
+  clearTimeout(breathATimer);
   scanIdx=0;
-  try{ sfx.pause(); sfx.onended=null; sfx.onerror=null; sfx.src=''; }catch(e){}
 }
 
 function playKey(key, onDone){
   if(!state.breathAudio){if(onDone)setTimeout(onDone,0);return;}
+  if(!bufs[key]){
+    // Buffer not ready yet — skip this cue but keep chain going
+    if(onDone)setTimeout(onDone,200);
+    return;
+  }
   try{
-    sfx.pause();
-    sfx.src='./audio/'+key+'.mp3';
-    sfx.currentTime=0;
-    sfx.onended=function(){if(onDone)onDone();};
-    sfx.onerror=function(e){console.warn('audio err',key,e);if(onDone)onDone();};
-    var p=sfx.play();
-    if(p&&p.catch)p.catch(function(e){
-      console.warn('play blocked:',key,e.name);
-      if(onDone)onDone();
-    });
-  }catch(e){console.warn('playKey ex',e);if(onDone)onDone();}
+    var ctx=getCtx();
+    var src=ctx.createBufferSource();
+    src.buffer=bufs[key];
+    src.connect(ctx.destination);
+    src.onended=function(){if(onDone)onDone();};
+    src.start(0);
+  }catch(e){
+    if(onDone)setTimeout(onDone,200);
+  }
 }
 
 // Breathing cues: Inspira (at cycle start) → wait → Expira → wait → loop
@@ -301,6 +327,7 @@ function doScanCue(){
 }
 
 function toggleAudio(){
+  resumeCtx(); // unlock iOS AudioContext on toggle gesture
   state.breathAudio=!state.breathAudio;
   sSet('rumo:breathAudio',state.breathAudio?'true':'false');
   if(!state.breathAudio){
@@ -393,7 +420,7 @@ function bPhase(){var el=document.getElementById('breathPhase');if(el)el.textCon
 function startBreath(){
   if(breath.running||breath.remaining<=0)return;
   breath.running=true;
-  // MUST call audio synchronously here — we are in the user gesture handler
+  resumeCtx(); // unlock iOS AudioContext — must be in user gesture
   if(state.breathAudio)startBreathAudio();
   var c=document.getElementById('breathCircle');if(c)c.style.animationPlayState='running';
   var btn=document.getElementById('btnBreathToggle');if(btn)btn.textContent='Pausar';
@@ -427,7 +454,7 @@ function bodyUI(){
 function startBody(){
   if(body.running||body.remaining<=0)return;
   body.running=true;
-  // MUST call audio synchronously here — we are in the user gesture handler
+  resumeCtx(); // unlock iOS AudioContext — must be in user gesture
   if(state.breathAudio)startBodyAudio();
   var btn=document.getElementById('btnBodyToggle');if(btn)btn.textContent='Pausar';
   body.int=setInterval(function(){
