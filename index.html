@@ -260,6 +260,10 @@ function stopAllAudio(){
   clearTimeout(scanTimer);
   clearTimeout(breathATimer);
   scanIdx=0;
+  if(typeof scanTimeouts!=='undefined'){
+    scanTimeouts.forEach(clearTimeout);scanTimeouts=[];
+  }
+  try{window.speechSynthesis.cancel();}catch(e){}
 }
 
 function playKey(key, onDone){
@@ -298,31 +302,38 @@ function doBreathCue(phase){
   });
 }
 
-// Body scan cues
-var SCAN_SEQ=[
-  {k:'scan_0', w:3000},
-  {k:'scan_1', w:6000},
-  {k:'scan_2', w:7000},
-  {k:'scan_3', w:5000},
-  {k:'scan_4', w:7000},
-  {k:'scan_5', w:6000},
-  {k:'scan_6', w:6000},
-  {k:'scan_7', w:7000},
-  {k:'scan_8', w:7000},
-  {k:'scan_9', w:5000},
-  {k:'scan_10',w:0}
+// Body scan: use iOS native speechSynthesis voice (Siri-quality).
+// AudioContext.resume() was called just before this — it unlocks the iOS audio
+// session, which allows speechSynthesis to work from setTimeout callbacks.
+// All setTimeout registrations happen synchronously in the button click handler.
+var scanTimeouts=[];
+var SCAN_CUES=[
+  [0,    'Fecha os olhos.'],
+  [3000, 'Repara nos pés e nas pernas.'],
+  [11000,'Pesados ou leves? Apenas nota.'],
+  [19000,'Repara no abdómen.'],
+  [24000,'Tenso ou solto?'],
+  [31000,'Repara no peito e na respiração.'],
+  [39000,'Sem alterar nada. Apenas observa.'],
+  [46000,'Repara nos ombros.'],
+  [54000,'Repara no maxilar e na testa.'],
+  [62000,'Mais uma vez, do início ao fim.'],
+  [68000,'Sem corrigir nada. Apenas repara.']
 ];
 function startBodyAudio(){
   if(!state.breathAudio)return;
-  scanIdx=0;
-  doScanCue();
-}
-function doScanCue(){
-  if(!body.running||!state.breathAudio||scanIdx>=SCAN_SEQ.length)return;
-  var step=SCAN_SEQ[scanIdx++];
-  playKey(step.k,function(){
-    if(!body.running||!state.breathAudio)return;
-    if(step.w>0&&scanIdx<SCAN_SEQ.length)scanTimer=setTimeout(doScanCue,step.w);
+  scanTimeouts.forEach(clearTimeout);scanTimeouts=[];
+  try{window.speechSynthesis.cancel();}catch(e){}
+  // Register all cues synchronously — iOS treats these as user-initiated
+  SCAN_CUES.forEach(function(cue){
+    scanTimeouts.push(setTimeout(function(){
+      if(!body.running||!state.breathAudio)return;
+      try{
+        var u=new SpeechSynthesisUtterance(cue[1]);
+        u.lang='pt-PT';u.rate=0.82;u.pitch=1.0;u.volume=1.0;
+        window.speechSynthesis.speak(u);
+      }catch(e){}
+    },cue[0]));
   });
 }
 
