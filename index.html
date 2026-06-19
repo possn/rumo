@@ -360,22 +360,7 @@ function startBodyAudio(){
   });
 }
 
-// Breathing cues: Inspira (at cycle start) → wait → Expira → wait → loop
-function startBreathAudio(){
-  if(!state.breathAudio)return;
-  doBreathCue('inhale');
-}
-function doBreathCue(phase){
-  if(!breath.running||!state.breathAudio)return;
-  var key=phase==='inhale'?'inspira':'expira';
-  var wait=phase==='inhale'?3400:5400;
-  playKey(key,function(){
-    if(!breath.running||!state.breathAudio)return;
-    breathAudioTimer=setTimeout(function(){
-      doBreathCue(phase==='inhale'?'exhale':'inhale');
-    },wait);
-  });
-}
+
 
 
 
