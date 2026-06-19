@@ -321,41 +321,49 @@ function doBreathSpeech(phase){
   }catch(e){next();}
 }
 
-// ── BODY SCAN: speechSynthesis + AudioContext keep-alive ───────
-// All setTimeout registrations are synchronous in the button-click handler.
-// AudioContext keep-alive prevents iOS from killing the audio session between cues.
+// ── BODY SCAN: speechSynthesis only, no AudioContext ───────────
+// Keep gaps < 5s so iOS never kills the synthesis session.
+// No AudioContext here — avoids the iOS conflict where AudioContext
+// takes the audio session away from speechSynthesis.
 var SCAN_CUES=[
-  [0,    null,  'Fecha os olhos.'],
-  [3000, null,  'Repara nos pés e nas pernas.'],
-  [10000,true,  'Pesados ou leves? Tensos ou soltos? Apenas nota.'],
-  [20000,true,  'Repara no abdómen.'],
-  [25000,null,  'Tenso ou solto?'],
-  [32000,true,  'Repara no peito e na respiração.'],
-  [40000,true,  'Repara nos ombros.'],
-  [48000,true,  'Repara no maxilar e na testa.'],
-  [58000,true,  'Mais uma vez, do início ao fim.'],
-  [65000,null,  'Sem corrigir nada. Apenas repara.']
+  [0,    'Fecha os olhos.'],
+  [3000, 'Respira naturalmente.'],
+  [7000, 'Repara nos pés e nas pernas.'],
+  [12000,'Pesados ou leves?'],
+  [16000,'Tensos ou soltos? Apenas nota.'],
+  [21000,'Repara no abdómen.'],
+  [25000,'Tenso ou solto?'],
+  [29000,'Apenas observa.'],
+  [34000,'Repara no peito.'],
+  [38000,'Na respiração.'],
+  [42000,'Sem alterar nada.'],
+  [47000,'Repara nos ombros.'],
+  [51000,'Pesados ou leves?'],
+  [56000,'Repara no maxilar e na testa.'],
+  [61000,'Tensos ou relaxados?'],
+  [66000,'Mais uma vez, do início ao fim.'],
+  [70000,'Pés e pernas.'],
+  [74000,'Abdómen.'],
+  [78000,'Peito e respiração.'],
+  [82000,'Ombros.'],
+  [86000,'Rosto.'],
+  [91000,'Sem corrigir nada.'],
+  [95000,'Apenas repara.'],
+  [100000,'Continua a respirar.']
 ];
-// [ms, playbowl_before?, text]
 
 function startBodyAudio(){
   if(!state.breathAudio)return;
-  resumeCtx();       // unlock AudioContext
-  pulse();           // immediate pulse to confirm session active
-  startKeepAlive();  // keep alive every 8s
+  // NO resumeCtx() — AudioContext conflicts with speechSynthesis on iOS
   scanTimeouts.forEach(clearTimeout);scanTimeouts=[];
   SCAN_CUES.forEach(function(cue){
     scanTimeouts.push(setTimeout(function(){
       if(!body.running||!state.breathAudio)return;
-      if(cue[1])playBowl(); // chime before phrase (except first)
-      setTimeout(function(){
-        if(!body.running||!state.breathAudio)return;
-        try{
-          var u=new SpeechSynthesisUtterance(cue[2]);
-          u.lang='pt-PT';u.rate=0.80;u.pitch=1.0;u.volume=1.0;
-          window.speechSynthesis.speak(u);
-        }catch(e){}
-      },cue[1]?600:0); // small delay after chime
+      try{
+        var u=new SpeechSynthesisUtterance(cue[1]);
+        u.lang='pt-PT';u.rate=0.82;u.pitch=1.0;u.volume=1.0;
+        window.speechSynthesis.speak(u);
+      }catch(e){}
     },cue[0]));
   });
 }
@@ -490,7 +498,6 @@ function bodyUI(){
 function startBody(){
   if(body.running||body.remaining<=0)return;
   body.running=true;
-  resumeCtx(); // unlock iOS AudioContext — must be in user gesture
   if(state.breathAudio)startBodyAudio();
   var btn=document.getElementById('btnBodyToggle');if(btn)btn.textContent='Pausar';
   body.int=setInterval(function(){
