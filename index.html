@@ -224,65 +224,140 @@ function init(){
   preloadAudio(); // start fetching MP3 files immediately
 }
 
-// ── AUDIO ENGINE ───────────────────────────────────────────────
-// AudioContext + fetch() preloading.
-// iOS unlocks AudioContext at page level on first user gesture (resumeCtx).
-// Files pre-fetched on init; playKey uses decoded AudioBuffers — zero timing issues.
+// ── AUDIO ENGINE ──────────────────────────────────────────────
+// BREATHING : speechSynthesis — iOS native voice, proven working.
+// BODY SCAN : speechSynthesis for voice guidance, with AudioContext keep-alive.
+//
+// Why keep-alive: iOS suspends the audio session after ~15s of silence,
+// killing speechSynthesis from setTimeout. A near-silent AudioContext pulse
+// every 8s prevents suspension, allowing speechSynthesis to fire from callbacks.
 
-var actx = null;
-var bufs = {};
-var scanIdx=0, scanTimer=null, breathATimer=null;
-var AKEYS=['inspira','expira','scan_0','scan_1','scan_2','scan_3',
-           'scan_4','scan_5','scan_6','scan_7','scan_8','scan_9','scan_10'];
-
+var actx=null;
 function getCtx(){
-  if(!actx) actx=new(window.AudioContext||window.webkitAudioContext)();
+  if(!actx)actx=new(window.AudioContext||window.webkitAudioContext)();
   return actx;
 }
-
-// Call from any button in user gesture to unlock iOS audio
 function resumeCtx(){
-  try{ var c=getCtx(); if(c.state==='suspended')c.resume(); }catch(e){}
+  try{var c=getCtx();if(c.state==='suspended')c.resume();}catch(e){}
+}
+function preloadAudio(){}
+
+// Near-silent pulse to keep iOS audio session alive
+function pulse(){
+  try{
+    var c=getCtx(),t=c.currentTime;
+    var o=c.createOscillator(),g=c.createGain();
+    o.connect(g);g.connect(c.destination);
+    o.frequency.value=440;
+    g.gain.setValueAtTime(0.0001,t);
+    o.start(t);o.stop(t+0.05);
+  }catch(e){}
 }
 
-// Pre-fetch and decode all audio files on page load
-function preloadAudio(){
-  AKEYS.forEach(function(key){
-    fetch('./audio/'+key+'.mp3')
-      .then(function(r){return r.arrayBuffer();})
-      .then(function(ab){return getCtx().decodeAudioData(ab);})
-      .then(function(buf){bufs[key]=buf;})
-      .catch(function(){});
-  });
+// Bowl chime (used between voice cues as a transition signal)
+function playBowl(){
+  try{
+    var c=getCtx(),t=c.currentTime,dur=1.8;
+    [[432,0.28],[432*2.76,0.10]].forEach(function(p){
+      var o=c.createOscillator(),g=c.createGain();
+      o.connect(g);g.connect(c.destination);
+      o.type='sine';o.frequency.value=p[0];
+      g.gain.setValueAtTime(0,t);
+      g.gain.linearRampToValueAtTime(p[1],t+0.04);
+      g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+      o.start(t);o.stop(t+dur);
+    });
+  }catch(e){}
+}
+
+var breathSpeechActive=false;
+var breathATimer=null;
+var scanTimeouts=[];
+var keepAliveInt=null;
+var synthResumeInt=null;
+
+function startKeepAlive(){
+  stopKeepAlive();
+  keepAliveInt=setInterval(pulse,8000);
+  // iOS sometimes pauses synthesis mid-utterance — resume it
+  synthResumeInt=setInterval(function(){
+    try{if(window.speechSynthesis.paused)window.speechSynthesis.resume();}catch(e){}
+  },3000);
+}
+function stopKeepAlive(){
+  clearInterval(keepAliveInt);clearInterval(synthResumeInt);
+  keepAliveInt=null;synthResumeInt=null;
 }
 
 function stopAllAudio(){
-  clearTimeout(scanTimer);
+  breathSpeechActive=false;
   clearTimeout(breathATimer);
-  scanIdx=0;
-  if(typeof scanTimeouts!=='undefined'){
-    scanTimeouts.forEach(clearTimeout);scanTimeouts=[];
-  }
+  scanTimeouts.forEach(clearTimeout);scanTimeouts=[];
+  stopKeepAlive();
   try{window.speechSynthesis.cancel();}catch(e){}
 }
 
-function playKey(key, onDone){
-  if(!state.breathAudio){if(onDone)setTimeout(onDone,0);return;}
-  if(!bufs[key]){
-    // Buffer not ready yet — skip this cue but keep chain going
-    if(onDone)setTimeout(onDone,200);
-    return;
-  }
+// ── BREATHING: speechSynthesis (iOS native voice) ─────────────
+function startBreathAudio(){
+  if(!state.breathAudio)return;
+  breathSpeechActive=true;
+  doBreathSpeech('inhale');
+}
+function doBreathSpeech(phase){
+  if(!breath.running||!state.breathAudio||!breathSpeechActive)return;
+  var text=phase==='inhale'?'Inspira':'Expira';
+  var wait=phase==='inhale'?3200:5200;
+  var next=function(){
+    if(!breath.running||!state.breathAudio||!breathSpeechActive)return;
+    breathATimer=setTimeout(function(){doBreathSpeech(phase==='inhale'?'exhale':'inhale');},wait);
+  };
   try{
-    var ctx=getCtx();
-    var src=ctx.createBufferSource();
-    src.buffer=bufs[key];
-    src.connect(ctx.destination);
-    src.onended=function(){if(onDone)onDone();};
-    src.start(0);
-  }catch(e){
-    if(onDone)setTimeout(onDone,200);
-  }
+    var u=new SpeechSynthesisUtterance(text);
+    u.lang='pt-PT';u.rate=0.82;
+    u.pitch=phase==='inhale'?1.15:0.85;
+    u.volume=1.0;
+    u.onend=next;u.onerror=next;
+    window.speechSynthesis.speak(u);
+  }catch(e){next();}
+}
+
+// ── BODY SCAN: speechSynthesis + AudioContext keep-alive ───────
+// All setTimeout registrations are synchronous in the button-click handler.
+// AudioContext keep-alive prevents iOS from killing the audio session between cues.
+var SCAN_CUES=[
+  [0,    null,  'Fecha os olhos.'],
+  [3000, null,  'Repara nos pés e nas pernas.'],
+  [10000,true,  'Pesados ou leves? Tensos ou soltos? Apenas nota.'],
+  [20000,true,  'Repara no abdómen.'],
+  [25000,null,  'Tenso ou solto?'],
+  [32000,true,  'Repara no peito e na respiração.'],
+  [40000,true,  'Repara nos ombros.'],
+  [48000,true,  'Repara no maxilar e na testa.'],
+  [58000,true,  'Mais uma vez, do início ao fim.'],
+  [65000,null,  'Sem corrigir nada. Apenas repara.']
+];
+// [ms, playbowl_before?, text]
+
+function startBodyAudio(){
+  if(!state.breathAudio)return;
+  resumeCtx();       // unlock AudioContext
+  pulse();           // immediate pulse to confirm session active
+  startKeepAlive();  // keep alive every 8s
+  scanTimeouts.forEach(clearTimeout);scanTimeouts=[];
+  SCAN_CUES.forEach(function(cue){
+    scanTimeouts.push(setTimeout(function(){
+      if(!body.running||!state.breathAudio)return;
+      if(cue[1])playBowl(); // chime before phrase (except first)
+      setTimeout(function(){
+        if(!body.running||!state.breathAudio)return;
+        try{
+          var u=new SpeechSynthesisUtterance(cue[2]);
+          u.lang='pt-PT';u.rate=0.80;u.pitch=1.0;u.volume=1.0;
+          window.speechSynthesis.speak(u);
+        }catch(e){}
+      },cue[1]?600:0); // small delay after chime
+    },cue[0]));
+  });
 }
 
 // Breathing cues: Inspira (at cycle start) → wait → Expira → wait → loop
@@ -302,43 +377,9 @@ function doBreathCue(phase){
   });
 }
 
-// Body scan: use iOS native speechSynthesis voice (Siri-quality).
-// AudioContext.resume() was called just before this — it unlocks the iOS audio
-// session, which allows speechSynthesis to work from setTimeout callbacks.
-// All setTimeout registrations happen synchronously in the button click handler.
-var scanTimeouts=[];
-var SCAN_CUES=[
-  [0,    'Fecha os olhos.'],
-  [3000, 'Repara nos pés e nas pernas.'],
-  [11000,'Pesados ou leves? Apenas nota.'],
-  [19000,'Repara no abdómen.'],
-  [24000,'Tenso ou solto?'],
-  [31000,'Repara no peito e na respiração.'],
-  [39000,'Sem alterar nada. Apenas observa.'],
-  [46000,'Repara nos ombros.'],
-  [54000,'Repara no maxilar e na testa.'],
-  [62000,'Mais uma vez, do início ao fim.'],
-  [68000,'Sem corrigir nada. Apenas repara.']
-];
-function startBodyAudio(){
-  if(!state.breathAudio)return;
-  scanTimeouts.forEach(clearTimeout);scanTimeouts=[];
-  try{window.speechSynthesis.cancel();}catch(e){}
-  // Register all cues synchronously — iOS treats these as user-initiated
-  SCAN_CUES.forEach(function(cue){
-    scanTimeouts.push(setTimeout(function(){
-      if(!body.running||!state.breathAudio)return;
-      try{
-        var u=new SpeechSynthesisUtterance(cue[1]);
-        u.lang='pt-PT';u.rate=0.82;u.pitch=1.0;u.volume=1.0;
-        window.speechSynthesis.speak(u);
-      }catch(e){}
-    },cue[0]));
-  });
-}
+
 
 function toggleAudio(){
-  resumeCtx(); // unlock iOS AudioContext on toggle gesture
   state.breathAudio=!state.breathAudio;
   sSet('rumo:breathAudio',state.breathAudio?'true':'false');
   if(!state.breathAudio){
@@ -431,7 +472,6 @@ function bPhase(){var el=document.getElementById('breathPhase');if(el)el.textCon
 function startBreath(){
   if(breath.running||breath.remaining<=0)return;
   breath.running=true;
-  resumeCtx(); // unlock iOS AudioContext — must be in user gesture
   if(state.breathAudio)startBreathAudio();
   var c=document.getElementById('breathCircle');if(c)c.style.animationPlayState='running';
   var btn=document.getElementById('btnBreathToggle');if(btn)btn.textContent='Pausar';
