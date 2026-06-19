@@ -301,7 +301,12 @@ function stopAllAudio(){
 function startBreathAudio(){
   if(!state.breathAudio)return;
   breathSpeechActive=true;
-  doBreathSpeech('inhale');
+  // Cancel any stale speech; give iOS 150ms to reset before new utterance
+  try{window.speechSynthesis.cancel();}catch(e){}
+  setTimeout(function(){
+    if(!breath.running||!state.breathAudio||!breathSpeechActive)return;
+    doBreathSpeech('inhale');
+  },150);
 }
 function doBreathSpeech(phase){
   if(!breath.running||!state.breathAudio||!breathSpeechActive)return;
@@ -354,7 +359,7 @@ var SCAN_CUES=[
 
 function startBodyAudio(){
   if(!state.breathAudio)return;
-  // NO resumeCtx() — AudioContext conflicts with speechSynthesis on iOS
+  try{window.speechSynthesis.cancel();}catch(e){}
   scanTimeouts.forEach(clearTimeout);scanTimeouts=[];
   SCAN_CUES.forEach(function(cue){
     scanTimeouts.push(setTimeout(function(){
